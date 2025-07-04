@@ -1,0 +1,265 @@
+#
+import torch
+import os
+import argparse
+import warnings
+from random import shuffle, seed
+import numpy as np
+import pandas as pd
+from src.TransformerST_graph_func import TransformerST_graph_construction1 as graph_construction
+from src.TransformerST_graph_func import calculate_adj_matrix,search_l
+from src.TransformerST_utils_func import mk_dir, adata_preprocess, load_ST_file
+import anndata
+from src.TransformerST_train_adaptive import TransformerST_Train
+from sklearn import metrics
+import matplotlib.pyplot as plt
+import scanpy as sc
+import cv2
+from pytictoc import TicToc
+from VisionTransformer.main import main as trigger
+from VisionTransformer.utils import build_adata
+
+from anndata import AnnData
+from rpy2.robjects.packages import importr
+from rpy2.robjects import r
+# from scipy.io import savemat
+# import rpy2.robjects as robjects
+from rpy2.robjects import pandas2ri
+import torch
+import rpy2.robjects as ro
+importr('mclust')
+pandas2ri.activate()
+
+warnings.filterwarnings('ignore')
+torch.cuda.cudnn_enabled = False
+np.random.seed(0)
+torch.manual_seed(0)
+torch.cuda.manual_seed(0)
+device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+print('===== Using device: ' + device)
+
+
+
+# ################ Parameter setting
+parser = argparse.ArgumentParser()
+parser.add_argument('--k', type=int, default=20, help='parameter k in spatial graph')
+parser.add_argument('--knn_distanceType', type=str, default='euclidean',
+                    help='graph distance type: euclidean/cosine/correlation')
+parser.add_argument('--epochs', type=int, default=1000, help='Number of epochs to train.')
+parser.add_argument('--cell_feat_dim', type=int, default=3000, help='Dim of input genes')
+parser.add_argument('--feat_hidden1', type=int, default=512, help='Dim of DNN hidden 1-layer.')
+parser.add_argument('--feat_hidden2', type=int, default=128, help='Dim of DNN hidden 2-layer.')
+parser.add_argument('--gcn_hidden1', type=int, default=128, help='Dim of GCN hidden 1-layer.')
+parser.add_argument('--gcn_hidden2', type=int, default=64, help='Dim of GCN hidden 2-layer.')
+parser.add_argument('--p_drop', type=float, default=0.2, help='Dropout rate.')
+parser.add_argument('--using_dec', type=bool, default=True, help='Using DEC loss.')
+parser.add_argument('--using_mask', type=bool, default=False, help='Using mask for multi-dataset.')
+parser.add_argument('--feat_w', type=float, default=1, help='Weight of DNN loss.')
+parser.add_argument('--gcn_w', type=float, default=1, help='Weight of GCN loss.')
+parser.add_argument('--dec_kl_w', type=float, default=1, help='Weight of DEC loss.')
+parser.add_argument('--gcn_lr', type=float, default=0.001, help='Initial GNN learning rate.')
+parser.add_argument('--gcn_decay', type=float, default=0.0001, help='Initial decay rate.')
+parser.add_argument('--dec_cluster_n', type=int, default=10, help='DEC cluster number.')
+parser.add_argument('--dec_interval', type=int, default=20, help='DEC interval nnumber.')
+parser.add_argument('--dec_tol', type=float, default=0.00, help='DEC tol.')
+# ______________ Eval clustering Setting ______________
+parser.add_argument('--eval_resolution', type=int, default=1, help='Eval cluster number.')
+parser.add_argument('--eval_graph_n', type=int, default=20, help='Eval graph kN tol.')
+
+params = parser.parse_args()
+params.device = device
+
+# ################ Path setting
+data_root = './data/Her2ST'
+# all DLPFC folder list
+# proj_list = ['A1', 'A2', 'A3', 'A4']
+proj_list = ['A1']
+# proj_list = ['151507']
+# set saving result path
+save_root = './output/her2st'
+# can create a list of test patients here, or store the list in dataset or in the anndata object?
+# need to be able to access this list later for evaluation after training vision transformer
+
+#For now, hard code the test subjects:
+cnt_dir = r'../../data/her2st/data/ST-cnts'
+img_dir = r'../../data/her2st/data/ST-imgs'
+pos_dir = r'../../data/her2st/data/ST-spotfiles'
+lbl_dir = r'../../data/her2st/data/ST-pat/lbl'
+names = os.listdir(cnt_dir)
+names.sort()
+names = [i[:2] for i in names]
+patients = ['A', 'B', 'C', 'D', 'E', 'F', 'G']
+print('Patients:', patients)
+seed(42)  
+shuffle(patients)
+test_groups = patients[:2]  # Select first two patients as test groups
+print('Test groups:', test_groups)
+train_groups = list(set(patients) - set(test_groups))
+print('Train groups:', train_groups)
+samples = names[1:33]
+te_names = [x for x in samples if x[0] in test_groups]
+tr_names = list(set(samples) - set(te_names))
+
+# data = ViT_HER2ST(cnt_dir=cnt_dir, img_dir=img_dir, pos_dir=pos_dir, lbl_dir=lbl_dir, train=True, te_people=train_groups)
+
+def res_search_fixed_clus(adata, fixed_clus_count, increment=0.02):
+    '''
+        arg1(adata)[AnnData matrix]
+        arg2(fixed_clus_count)[int]
+
+        return:
+            resolution[int]
+    '''
+    for res in sorted(list(np.arange(0.2, 2.5, increment)), reverse=True):
+        sc.tl.leiden(adata, random_state=0, resolution=res)
+        count_unique_leiden = len(pd.DataFrame(adata.obs['leiden']).leiden.unique())
+        if count_unique_leiden == fixed_clus_count:
+            break
+    return res
+
+t = TicToc()
+# Train vis model on the training groups. 
+trigger(test_groups)
+
+for sample_num in range(len(te_names)):
+    t.tic()
+    sample_name = tr_names[sample_num]
+    print('===== Sample ' + str(sample_num+1) + ' : ' + sample_name)
+    # ################## Load data    
+    # Produce an anndata object with only the train groups (Training meaning vis_model training)
+    adata_h5, image = build_adata(name=sample_name, return_im=True, im_format='npy')
+    # adata_h5 = load_ST_file(file_fold=file_fold, load_images=False)
+    adata_h5.var_names_make_unique()
+    # print(adata_h5.obsm['spatial'])
+    adata = adata_preprocess(AnnData(adata_h5), min_cells=5, pca_n_comps=params.cell_feat_dim)
+    adata_X=adata.X.toarray()
+    # adata_X = adata.obsm['X_pca']
+    # adata=AnnData(adata_h5)
+    # sc.tl.pca(adata, svd_solver='arpack')
+    sc.pp.neighbors(adata)
+    sc.tl.umap(adata)
+    # pre_resolution = res_search_fixed_clus(adata, 5)
+    pre_resolution=0.6
+    sc.tl.leiden(adata, resolution=pre_resolution, key_added='expression_louvain_label')
+    # nr, nc = adata_X.shape
+    # x_sample_r = ro.r.matrix(adata_X, nrow=nr, ncol=nc)
+    # label_r = r['Mclust'](x_sample_r, G=7, modelNames="EEE")
+    # label = np.array(label_r.rx('classification'))
+    # print(adata)
+    # pre_labels = 'expression_louvain_label'
+    # print(adata_X.shape,'ssssss')
+    # image = cv2.imread(img_fold)
+    # print(img.shape)
+    params.use_feature=0
+    spatial_loc=adata_h5.obsm['spatial']
+    # print(type(spatial_loc[0]))
+    x_pixel=spatial_loc[:,2]
+    y_pixel = spatial_loc[:,3]
+    x=spatial_loc[:,0]
+    y= spatial_loc[:, 1]
+    # print(image.shape)
+    # x=x_pixel
+    # y=y_pixel
+    beta=49
+    alpha = 1
+    beta_half = round(beta / 2)
+    g = []
+    # print(x_pixel.shape)
+    ######################
+    for i in range(spatial_loc.shape[0]):
+        max_x = image.shape[0]
+        max_y = image.shape[1]
+        # print(x_pixel.shape,max(0, x_pixel[i] - beta_half),min(max_x, x_pixel[i] + beta_half + 1),max(0, y_pixel[i] - beta_half),min(max_y, y_pixel[i] + beta_half + 1))
+        nbs = image[max(0, x_pixel[i] - beta_half):min(max_x, x_pixel[i] + beta_half + 1),
+              max(0, y_pixel[i] - beta_half):min(max_y, y_pixel[i] + beta_half + 1)]
+        g.append(np.mean(np.mean(nbs, axis=0), axis=0))
+    c0, c1, c2 = [], [], []
+    for i in g:
+        c0.append(i[0])
+        c1.append(i[1])
+        c2.append(i[2])
+    c0 = np.array(c0)
+    c1 = np.array(c1)
+    c2 = np.array(c2)
+    # print("Var of c0,c1,c2 = ", np.var(c0), np.var(c1), np.var(c2))
+    c3 = (c0 * np.var(c0) + c1 * np.var(c1) + c2 * np.var(c2)) / (np.var(c0) + np.var(c1) + np.var(c2))
+    c4 = (c3 - np.mean(c3)) / np.std(c3)
+    z_scale = np.max([np.std(x), np.std(y)]) * alpha
+    z = c4 * z_scale
+    z = z.tolist()
+    # print("Var of x,y,z = ", np.var(x), np.var(y), np.var(z))
+    X = np.array([x, y, z]).T.astype(np.float32)
+
+    ###################
+    graph_dict,data1= graph_construction(X, adata_h5.shape[0],adata.obs['expression_louvain_label'] , params)
+    params.use_feature = 1
+    graph_dict_prue, data1_prue = graph_construction(X, adata_h5.shape[0],
+                                           adata.obs['expression_louvain_label'], params)
+    params.save_path = mk_dir(f'{save_root}/{sample_name}/TransformerST_adaptive', )
+
+    params.cell_num = adata_h5.shape[0]
+    print('==== Graph Construction Finished')
+    vision_transformer = True  # Set this to True or False depending on your specific case
+
+    # Check if using a vision transformer
+    if vision_transformer:
+      # If you want to combine the image vision transformer embedding with the original gene expression,
+      # concatenate the outputs. Otherwise, you might use only the gene expression data.
+      # Load image vision transformer embedding from a file
+    # Load the saved vision transformer model
+        fold = 1
+        tag = '-vit_1_1_cv'
+        model_path = "/VisionTransformer/model/her2st_last_train_w" + tag + '_' + str(fold) + ".ckpt"
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"Vision transformer model not found at {model_path}")
+            
+        vision_transformer_model = torch.load(model_path, map_location=device)
+        vision_transformer_model.eval()
+        print(f"Loaded vision transformer model from {model_path}")
+        gene_pred = vision_transformer_model(adata_h5.X, adata_h5.obsm['spatial'])
+        # gene_pred = 
+        # # If gene_pred is saved as a PyTorch tensor
+        # gene_pred = torch.load('gene_pred.pt')
+        gene_pred = gene_pred.numpy()  # Convert it to numpy if it's a tensor
+         # Check if the dimensions match for concatenation 
+        if adata_X.shape[1] == gene_pred.shape[1]:
+            # Process for vision transformer
+            # Include processing steps for vision transformer if necessary
+            print("Data will be processed for image-gene expression corepresentation using a vision transformer.")
+            # The following line is where you'd include your vision transformer processing
+            # For now, it just concatenates the arrays
+            adata_X = np.concatenate((adata_X, gene_pred), axis=0)
+        else:
+            raise ValueError('The number of columns (genes) in adata_X and gene_pred must be the same')
+        # If not using a vision transformer, you may decide to use adata_X as is
+        # or any other processing you may want to apply
+        print("Using gene expression data without vision transformer processing.")
+    # ################## Model training
+    TransformerST_net = TransformerST_Train(adata_X, graph_dict,data1,graph_dict_prue,data1_prue,adata_h5.obsm['spatial'],params)
+    if params.using_dec:
+        TransformerST_net.train_with_dec()
+    else:
+        TransformerST_net.train_without_dec()
+    TransformerST_feat, _, _ = TransformerST_net.process()
+
+    np.savez(f'{params.save_path}/TransformerST_result.npz', sedr_feat=TransformerST_feat, params=params)
+    t.toc()
+    # ################## Result plot
+    adata_TransformerST = anndata.AnnData(TransformerST_feat)
+    # adata_h5 = load_ST_file(file_fold=file_fold,load_images=True)
+    adata_h5.var_names_make_unique()
+    adata_TransformerST.uns['spatial'] = adata_h5.uns['spatial']
+    adata_TransformerST.obsm['spatial'] = adata_h5.obsm['spatial']
+    sc.pp.neighbors(adata_TransformerST, n_neighbors=params.eval_graph_n)
+    sc.tl.umap(adata_TransformerST)
+    n_clusters = 4
+    eval_resolution = res_search_fixed_clus(adata_TransformerST, n_clusters)
+    # print(eval_resolution)
+    sc.tl.leiden(adata_TransformerST, key_added="TransformerST_leiden", resolution=eval_resolution)
+    # print(adata_sedr)
+    sc.pl.spatial(adata_TransformerST, img_key="hires", color=['TransformerST_leiden'], show=False)
+    plt.savefig(f'{params.save_path}/TransformerST_leiden_plot.jpg', bbox_inches='tight', dpi=150)
+    df_meta = pd.read_csv(f'{data_root}/{sample_name}/outs/metadata.tsv', sep='\t')
+    df_meta['TransformerST'] = adata_TransformerST.obs['TransformerST_leiden'].tolist()
+    df_meta.to_csv(f'{params.save_path}/metadata.tsv', sep='\t', index=False)
+
