@@ -6,8 +6,10 @@ import warnings
 from random import shuffle, seed
 import numpy as np
 import pandas as pd
+from src import *
+from VisionTransformer import *
 from src.TransformerST_graph_func import TransformerST_graph_construction1 as graph_construction
-from src.TransformerST_graph_func import calculate_adj_matrix,search_l
+# from src.TransformerST_graph_func import calculate_adj_matrix,search_l
 from src.TransformerST_utils_func import mk_dir, adata_preprocess, load_ST_file
 import anndata
 from src.TransformerST_train_adaptive import TransformerST_Train
@@ -119,7 +121,7 @@ def res_search_fixed_clus(adata, fixed_clus_count, increment=0.02):
 
 t = TicToc()
 # Train vis model on the training groups. 
-trigger(test_groups)
+trigger(train_groups)
 
 for sample_num in range(len(te_names)):
     t.tic()

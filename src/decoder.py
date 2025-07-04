@@ -10,11 +10,11 @@ import torch.nn as nn
 from torch.nn.functional import softplus
 from torch.nn import functional as F
 
-from torch.distributions.uniform import Uniform
+# from torch.distributions.uniform import Uniform
 from torch.distributions.gamma import Gamma
 from torch.distributions.dirichlet import Dirichlet
 
-from src.helpers import NB_log_prob, ZINB_log_prob, ELBO_collapsed_Categorical, init_weights
+from src.Utils.helpers import NB_log_prob, ZINB_log_prob, ELBO_collapsed_Categorical, init_weights
 
 class StandardDecoder(nn.Module):
     """Standard Neural Network decoder of a standard VAE."""

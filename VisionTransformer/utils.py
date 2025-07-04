@@ -29,8 +29,8 @@ for i in IG.values():
 LYM = {'B_cell':BCELL, 'CD4+T_cell':CD4T, 'CD8+T_cell':CD8T}
 
 def read_tiff(path):
-"""
-Loads and converts a TIFF image file into a NumPy array. """
+    """
+    Loads and converts a TIFF image file into a NumPy array. """
     Image.MAX_IMAGE_PIXELS = 933120000
     im = Image.open(path)
     imarray = np.array(im)
@@ -38,9 +38,9 @@ Loads and converts a TIFF image file into a NumPy array. """
     return im
 
 def preprocess(adata, n_keep=1000, include=LYM, g=True):
-        """
-        Performs data preprocessing on an AnnData object. 
-        """
+    """
+    Performs data preprocessing on an AnnData object. 
+    """
     adata.var_names_make_unique()
     sc.pp.normalize_total(adata)
     sc.pp.log1p(adata)
@@ -78,10 +78,10 @@ def preprocess(adata, n_keep=1000, include=LYM, g=True):
     return adata
 
 def comp_umap(adata):
-        """
-        Computes UMAP (Uniform Manifold Approximation and Projection) for 
-        dimensionality reduction and clustering (using Leiden algorithm) on an AnnData object. 
-        """
+    """
+    Computes UMAP (Uniform Manifold Approximation and Projection) for 
+    dimensionality reduction and clustering (using Leiden algorithm) on an AnnData object. 
+    """
     sc.pp.pca(adata)
     sc.pp.neighbors(adata)
     sc.tl.umap(adata)
@@ -89,9 +89,9 @@ def comp_umap(adata):
     return adata
 
 def comp_tsne_km(adata,k=10):
-        """
-        Applies PCA and t-SNE for dimensionality reduction and uses KMeans clustering to classify data points in an AnnData object.
-        """
+    """
+    Applies PCA and t-SNE for dimensionality reduction and uses KMeans clustering to classify data points in an AnnData object.
+    """
     sc.pp.pca(adata)
     sc.tl.tsne(adata)
     kmeans = KMeans(n_clusters=k, init="k-means++", random_state=0).fit(adata.obsm['X_pca'])
@@ -99,9 +99,9 @@ def comp_tsne_km(adata,k=10):
     return adata
 
 def co_embed(a,b,k=10):
-"""
-Merges two AnnData objects a and b, applies PCA and t-SNE for dimensionality reduction, and performs KMeans clustering. 
-"""
+    """
+    Merges two AnnData objects a and b, applies PCA and t-SNE for dimensionality reduction, and performs KMeans clustering. 
+    """
     a.obs['tag'] = 'Truth'
     b.obs['tag'] = 'Pred'
     adata = ad.concat([a,b])
@@ -111,14 +111,20 @@ Merges two AnnData objects a and b, applies PCA and t-SNE for dimensionality red
     adata.obs['kmeans'] = kmeans.labels_.astype(str)
     return adata
 
-def build_adata(name='H1'):
-"""
-Constructs an AnnData object from spatial transcriptomics data. It loads count data, image files, 
-and spatial coordinates, processes the data, and returns an AnnData object along with the corresponding image. 
-"""
-    cnt_dir = 'data/her2st/data/ST-cnts'
-    img_dir = 'data/her2st/data/ST-imgs'
-    pos_dir = 'data/her2st/data/ST-spotfiles'
+def build_adata(name='H1', return_im=True, image_format='npy'):
+    """
+    Constructs an AnnData object from spatial transcriptomics data. It loads count data, image files, 
+    and spatial coordinates, processes the data, and returns an AnnData object along with the corresponding image. 
+    """ 
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    cnt_dir = '../../../data/her2st/data/ST-cnts'
+    img_dir = '../../../data/her2st/data/ST-imgs'
+    pos_dir = '../../../data/her2st/data/ST-spotfiles'
+    g_list_dir = '../data/her_hvg_cut_1000.npy'
+    cnt_dir = os.path.join(base_path, cnt_dir)
+    img_dir = os.path.join(base_path, img_dir)
+    pos_dir = os.path.join(base_path, pos_dir)
+    g_list_dir = os.path.join(base_path, g_list_dir)
 
     pre = img_dir+'/'+name[0]+'/'+name
     fig_name = os.listdir(pre)[0]
@@ -140,18 +146,28 @@ and spatial coordinates, processes the data, and returns an AnnData object along
 
     meta = cnt.join((df.set_index('id')))
 
-    gene_list = list(np.load('data/her_g_list.npy'))
+    # gene_list = list(np.load('data/her_g_list.npy'))
+    gene_list = list(np.load(g_list_dir,allow_pickle=True))
     adata = ann.AnnData(scp.transform.log(scp.normalize.library_size_normalize(meta[gene_list].values)))
     adata.var_names = gene_list
     adata.obsm['spatial'] = np.floor(meta[['pixel_x','pixel_y']].values).astype(int)
 
-    return adata, im
+    if return_im:
+        if image_format == 'npy':
+            im = np.load(path.replace('.tsv','.npy'))
+        elif image_format == 'tiff':
+            im = read_tiff(path.replace('.tsv','.tiff'))
+        else:
+            raise ValueError("Unsupported image format. Use 'npy' or 'tiff'.")
+        return adata, im
+    else:
+        return adata
 
 
 def get_data(dataset='bc1', n_keep=1000, include=LYM, g=True):
-        """
-        Retrieves and preprocesses spatial transcriptomics data from a specified dataset. 
-        """
+    """
+    Retrieves and preprocesses spatial transcriptomics data from a specified dataset. 
+    """
     if dataset == 'bc1':
        adata = sc.datasets.visium_sge(sample_id='V1_Breast_Cancer_Block_A_Section_1', include_hires_tiff=True)
        adata = preprocess(adata, n_keep, include, g)

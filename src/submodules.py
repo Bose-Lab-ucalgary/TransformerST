@@ -16,10 +16,10 @@ act = nn.LeakyReLU(LEAKY_VALUE,inplace=True)
 
 # out_shape = (H-1)//stride + 1 # for dilation=1
 def conv(in_channels, out_channels, kernel_size=3, act=True, stride=1, groups=1, bias=True):
-"""
-Constructs a convolutional layer (1D) with optional LeakyReLU activation. 
-It's a basic building block for neural network models, particularly useful for feature extraction from sequences or time-series data.
-"""
+    """
+    Constructs a convolutional layer (1D) with optional LeakyReLU activation. 
+    It's a basic building block for neural network models, particularly useful for feature extraction from sequences or time-series data.
+    """
     m = []
     m.append(nn.Conv1d(in_channels, out_channels, kernel_size=kernel_size, stride=stride,
         padding=(kernel_size-1)//2, groups=groups, bias=bias))
@@ -37,9 +37,9 @@ It's a basic building block for neural network models, particularly useful for f
 
 
 class ResBlock(nn.Module):
-"""
-Implements a residual block using 1D convolutional layers, commonly used in deep learning architectures to enable training of deeper networks by allowing better gradient flow.
-"""
+    """
+    Implements a residual block using 1D convolutional layers, commonly used in deep learning architectures to enable training of deeper networks by allowing better gradient flow.
+    """
     def __init__(self, n_feats, kernel_size=3, res_scale=1, bias=True):
 
         super(ResBlock, self).__init__()

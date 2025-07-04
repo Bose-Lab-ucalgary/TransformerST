@@ -3,10 +3,10 @@ import torch
 # import torch.nn.functional as F
 # import torch.optim as optim
 # from utils import read_tiff
-from contour_util import *
+from VisionTransformer.contour_util import *
 import numpy as np
 # import torchvision
-# import torchvision.transforms as transforms
+import torchvision.transforms as transforms
 import scanpy as sc
 # from utils import get_data
 import os
@@ -57,6 +57,7 @@ class LUNG(torch.utils.data.Dataset):
             self.gene_dict[name] = gene_list
 
         self.id2name = dict(enumerate(names))
+        
 
 
     def filter_helper(self):
@@ -85,7 +86,7 @@ class LUNG(torch.utils.data.Dataset):
         
         i = index
         im = self.img_dict[self.id2name[i]]
-        #im = im.permute(1, 0, 2)
+        #im = im.permute(1, 0, 2) # Required?
         exps = self.exp_dict[self.id2name[i]]
         centers = self.center_dict[self.id2name[i]]
         patch_dim = 3 * self.r * self.r * 4
@@ -195,33 +196,38 @@ class ViT_HER2ST(torch.utils.data.Dataset):
     def __init__(self,train=True,gene_list=None,ds=None,sr=False,fold=0, incl_patients = None):
         super().__init__()
         
-        self.cnt_dir = '../../data/her2st/data/ST-cnts'
-        self.img_dir = '../../data/her2st/data/ST-imgs'
-        self.pos_dir = '../../data/her2st/data/ST-spotfiles'
-        self.lbl_dir = '../../data/her2st/data/ST-pat/lbl'
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.cnt_dir = '../../../data/her2st/data/ST-cnts'
+        self.img_dir = '../../../data/her2st/data/ST-imgs'
+        self.pos_dir = '../../../data/her2st/data/ST-spotfiles'
+        self.lbl_dir = '../../../data/her2st/data/ST-pat/lbl'
         
-        self.cnt_dir = os.path.abspath(self.cnt_dir)
-        self.img_dir = os.path.abspath(self.img_dir)
-        self.pos_dir = os.path.abspath(self.pos_dir)
-        self.lbl_dir = os.path.abspath(self.lbl_dir)
+        self.cnt_dir = os.path.join(self.base_dir, self.cnt_dir)
+        self.img_dir = os.path.join(self.base_dir, self.img_dir)
+        self.pos_dir = os.path.join(self.base_dir, self.pos_dir)
+        self.lbl_dir = os.path.join(self.base_dir, self.lbl_dir)
         
         self.r = 224//4
 
         # gene_list = list(np.load('data/her_hvg.npy',allow_pickle=True)) 
-        relative_gene_list = 'data/her_hvg_cut_1000.npy'
-        abs_path = os.path.abspath(relative_gene_list)
+        relative_gene_list = '../data/her_hvg_cut_1000.npy'
+        
+        abs_path = os.path.join(self.base_dir, relative_gene_list)
         
         gene_list = list(np.load(abs_path,allow_pickle=True))
         self.gene_list = gene_list
+        # print(f"Using gene list: {gene_list}")
         names = os.listdir(self.cnt_dir) # ['A1.tsv', 'A2.tsv',...]
         names.sort()
         names = [i[:2] for i in names] # ['A1', 'A2'..]
+        print(f"Names in dataset: {names}")
         self.train = train
         self.sr = sr
         
         # samples = ['A1','B1','C1','D1','E1','F1','G2','H1']
         if incl_patients is not None:
-            names = [name for name in names if name in incl_patients]
+            names = [name for name in names if name[0] in incl_patients]
+            print(f"Filtered names based on incl_patients: {names}")
         
         else:
             samples = names[1:33]
@@ -254,13 +260,14 @@ class ViT_HER2ST(torch.utils.data.Dataset):
         self.lengths = [len(i) for i in self.meta_dict.values()]
         self.cumlen = np.cumsum(self.lengths)
         self.id2name = dict(enumerate(names))
+        print(f"Number of samples in dataset: {self.__len__()}")
 
-        self.transforms = transforms.Compose([
-            transforms.ColorJitter(0.5,0.5,0.5),
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomRotation(degrees=180),
-            transforms.ToTensor()
-        ])
+        # self.transforms = transforms.Compose([
+        #     transforms.ColorJitter(0.5,0.5,0.5),
+        #     transforms.RandomHorizontalFlip(),
+        #     transforms.RandomRotation(degrees=180),
+        #     transforms.ToTensor()
+        # ])
 
     def filter_helper(self):
         a = np.zeros(len(self.gene_list))
@@ -304,8 +311,8 @@ class ViT_HER2ST(torch.utils.data.Dataset):
         
         i = index
         im = self.img_dict[self.id2name[i]]
-        im = im.permute(1,0,2)
-        # im = torch.Tensor(np.array(self.im))
+        # im = im.permute(1,0,2)
+        im_torch = torch.Tensor(np.array(im))
         exps = self.exp_dict[self.id2name[i]]
         centers = self.center_dict[self.id2name[i]]
         loc = self.loc_dict[self.id2name[i]]
@@ -353,13 +360,15 @@ class ViT_HER2ST(torch.utils.data.Dataset):
             
             patches = torch.zeros((n_patches,patch_dim))
             exps = torch.Tensor(exps)
-
+            min_val = torch.min(im_torch)
+            max_val = torch.max(im_torch)
 
             for i in range(n_patches):
                 center = centers[i]
                 x, y = center
                 patch = im[(x-self.r):(x+self.r),(y-self.r):(y+self.r),:]
-                patches[i] = patch.flatten()
+                normalized_patch = (patch - min_val) / (max_val - min_val)
+                patches[i] = normalized_patch.flatten()
 
             if self.train:
                 return patches, positions, exps
@@ -369,17 +378,24 @@ class ViT_HER2ST(torch.utils.data.Dataset):
     def __len__(self):
         return len(self.exp_dict)
 
-    def get_img(self,name):
-        pre = self.img_dir+'/'+name[0]+'/'+name
+    # def get_img(self,name):
+    #     pre = self.img_dir+'/'+name[0]+'/'+name
+    #     fig_name = os.listdir(pre)[0]
+    #     path = pre+'/'+fig_name
+    #     im = Image.open(path)
+    #     return im
+    def get_img(self, name):
+        pre = os.path.join(self.img_dir, name[0], name)
         fig_name = os.listdir(pre)[0]
-        path = pre+'/'+fig_name
-        im = Image.open(path)
-        return im
+        path = os.path.join(pre, fig_name)
+        img_bgr = cv2.imread(path, cv2.IMREAD_COLOR)
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        return img_rgb
 
     def get_cnt(self,name):
         path = self.cnt_dir+'/'+name+'.tsv'
         df = pd.read_csv(path,sep='\t',index_col=0)
-
+        # print('get_cnt returned a df with columns:', df.columns)
         return df
 
     def get_pos(self,name):

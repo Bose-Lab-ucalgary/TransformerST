@@ -1,20 +1,20 @@
-import os
-from argparse import ArgumentParser
+# import os
+# from argparse import ArgumentParser
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
+# import torchvision
 import pytorch_lightning as pl
-from torchmetrics.functional import accuracy
-from transformer import ViT
-import math
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+# from torchmetrics.functional import accuracy
+from VisionTransformer.transformer import ViT
+# import math
+# from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 class lung_finetune_flex(pl.LightningModule):
     """
     spatial transcriptomics task in lung tissue. This class defines a neural network architecture and its training, validation, and testing routines.
     """
-    def __init__(self, patch_size=112, n_layers=4, n_genes=1000, dim=1024, learning_rate=1e-4, dropout=0.1, n_pos=128):
+    def __init__(self, patch_size=112, n_layers=4, n_genes=785, dim=1024, learning_rate=1e-4, dropout=0.1, n_pos=128):
         super().__init__()
         self.learning_rate = learning_rate
         patch_dim = 3 * patch_size * patch_size
